@@ -16,9 +16,6 @@
 static uint64_t _touchSenderID = 0x8000000817319372;
 static double _deviceScreenWidth = 0;
 static double _deviceScreenHeight = 0;
-// Keep a tap down long enough for UIKit controls such as UISwitch to observe it as a real touch.
-// Dispatching began/moved/ended back-to-back can be coalesced before the control processes it.
-static const useconds_t kIOSMCPTapPhaseDelayUs = 50 * 1000;
 
 #define MAX_FINGER_INDEX 20
 #define TOUCH_EVENT_NOT_VALID 0
@@ -30,6 +27,46 @@ static const useconds_t kIOSMCPTapPhaseDelayUs = 50 * 1000;
 #define TOUCH_EVENT_Y_INDEX 3
 
 static int _eventsToAppend[MAX_FINGER_INDEX][4];
+
+// Per-finger state so size/pressure stay consistent during one touch
+static float _touchBasePressure[MAX_FINGER_INDEX];
+static float _touchBaseRadius[MAX_FINGER_INDEX];
+
+#pragma mark - Randomization helpers
+
+static float randFloat(float minVal, float maxVal) {
+    return minVal + ((float)arc4random_uniform(100000) / 100000.0f) * (maxVal - minVal);
+}
+
+static float clampFloat(float v, float lo, float hi) {
+    return v < lo ? lo : (v > hi ? hi : v);
+}
+
+// Keep a tap down long enough for UIKit controls such as UISwitch to observe it as a real touch.
+// Dispatching began/moved/ended back-to-back can be coalesced before the control processes it.
+// Originally a fixed 50 ms; now randomized between 45 ms and 90 ms (never below ~45 ms).
+static useconds_t randomTapPhaseDelayUs(void) {
+    return (useconds_t)randFloat(45000.0f, 90000.0f);
+}
+
+// Vary a base delay by +/- frac (e.g. 0.2 = +/-20%)
+static useconds_t jitterDelayUs(useconds_t base, float frac) {
+    float f = randFloat(1.0f - frac, 1.0f + frac);
+    return (useconds_t)((float)base * f);
+}
+
+// Small random offset (in points) so repeated taps don't hit the exact same pixel
+static CGPoint jitterPoint(CGPoint p, CGFloat maxOffset) {
+    CGFloat dx = ((CGFloat)arc4random_uniform(2001) / 1000.0 - 1.0) * maxOffset;
+    CGFloat dy = ((CGFloat)arc4random_uniform(2001) / 1000.0 - 1.0) * maxOffset;
+    CGFloat x = p.x + dx;
+    CGFloat y = p.y + dy;
+    if (x < 0) x = 0;
+    if (y < 0) y = 0;
+    if (_deviceScreenWidth > 0 && x > _deviceScreenWidth) x = _deviceScreenWidth;
+    if (_deviceScreenHeight > 0 && y > _deviceScreenHeight) y = _deviceScreenHeight;
+    return CGPointMake(x, y);
+}
 
 @implementation IOSMCPHIDManager {
     IOHIDEventSystemClientRef _hidClient;
@@ -211,14 +248,38 @@ static IOHIDEventRef createChildTouchEvent(TouchPhase phase, int index, CGPoint 
     );
     if (!child) return NULL;
 
-    // MajorRadius and MinorRadius: random values between 0.03f and 0.06f using arc4random_uniform
-    float majorRadius = 0.03f + (float)arc4random_uniform(4) * 0.01f;
-    float minorRadius = 0.03f + (float)arc4random_uniform(4) * 0.01f;
+    int slot = (index >= 0 && index < MAX_FINGER_INDEX) ? index : 0;
+    float pressure;
+    float majorRadius;
+    float minorRadius;
+
+    if (phase == TouchPhaseBegan) {
+        // Pick values once when the finger goes down
+        _touchBasePressure[slot] = randFloat(0.3f, 0.8f);
+        // Harder press -> slightly larger contact area (0.03 .. 0.05) plus a little noise
+        float t = (_touchBasePressure[slot] - 0.3f) / 0.5f;
+        _touchBaseRadius[slot] = clampFloat(0.03f + t * 0.02f + randFloat(-0.005f, 0.005f), 0.03f, 0.06f);
+    }
+
+    float basePressure = _touchBasePressure[slot] > 0 ? _touchBasePressure[slot] : 0.5f;
+    float baseRadius = _touchBaseRadius[slot] > 0 ? _touchBaseRadius[slot] : 0.04f;
+
+    if (phase == TouchPhaseEnded) {
+        // Finger lifting: no pressure, radius stays the same
+        pressure = 0.0f;
+        majorRadius = baseRadius;
+    } else if (phase == TouchPhaseMoved) {
+        // Tiny jitter around the base values
+        pressure = clampFloat(basePressure + randFloat(-0.02f, 0.02f), 0.05f, 1.0f);
+        majorRadius = clampFloat(baseRadius + randFloat(-0.003f, 0.003f), 0.02f, 0.07f);
+    } else {
+        pressure = basePressure;
+        majorRadius = baseRadius;
+    }
+    minorRadius = majorRadius * randFloat(0.85f, 1.0f);
+
     IOHIDEventSetFloatValue(child, 0xb0014, majorRadius);
     IOHIDEventSetFloatValue(child, 0xb0015, minorRadius);
-
-    // kIOHIDEventFieldDigitizerPressure: random value between 0.3f and 0.8f using arc4random_uniform
-    float pressure = 0.3f + (float)arc4random_uniform(6) * 0.1f;
     IOHIDEventSetFloatValue(child, 0xb0016, pressure);
 
     return child;
@@ -304,15 +365,18 @@ static void appendChildTouchEvent(IOHIDEventRef parent, TouchPhase phase, int in
 #pragma mark - Tap
 
 - (BOOL)performTapSequenceAtPoint:(CGPoint)point error:(NSString **)error {
+    // One small offset for the whole tap (same point for down / hold / up)
+    point = jitterPoint(point, 2.0);
+
     if (![self performTouchAtPoint:point phase:TouchPhaseBegan error:error]) {
         return NO;
     }
-    usleep(kIOSMCPTapPhaseDelayUs);
+    usleep(randomTapPhaseDelayUs());
 
     if (![self performTouchAtPoint:point phase:TouchPhaseMoved error:error]) {
         return NO;
     }
-    usleep(kIOSMCPTapPhaseDelayUs);
+    usleep(randomTapPhaseDelayUs());
 
     return [self performTouchAtPoint:point phase:TouchPhaseEnded error:error];
 }
@@ -353,7 +417,7 @@ static void appendChildTouchEvent(IOHIDEventRef parent, TouchPhase phase, int in
                 if (completion) completion(NO, error);
                 return;
             }
-            usleep(stepDelay);
+            usleep(jitterDelayUs(stepDelay, 0.2f));
 
             for (NSInteger i = 1; i <= totalSteps; i++) {
                 CGFloat t = (CGFloat)i / (CGFloat)totalSteps;
@@ -366,11 +430,11 @@ static void appendChildTouchEvent(IOHIDEventRef parent, TouchPhase phase, int in
                     return;
                 }
                 if (i < totalSteps) {
-                    usleep(stepDelay);
+                    usleep(jitterDelayUs(stepDelay, 0.2f));
                 }
             }
 
-            usleep(10000);
+            usleep(jitterDelayUs(10000, 0.3f));
             if (![self performTouchAtPoint:to phase:TouchPhaseEnded error:&error]) {
                 if (completion) completion(NO, error);
                 return;
@@ -412,7 +476,7 @@ static void appendChildTouchEvent(IOHIDEventRef parent, TouchPhase phase, int in
                 return;
             }
 
-            usleep((useconds_t)(interval * 1000));
+            usleep(jitterDelayUs((useconds_t)(interval * 1000), 0.15f));
 
             if (![self performTapSequenceAtPoint:point error:&error]) {
                 if (completion) completion(NO, error);
@@ -461,7 +525,7 @@ static void appendChildTouchEvent(IOHIDEventRef parent, TouchPhase phase, int in
                 if (completion) completion(NO, error);
                 return;
             }
-            usleep(holdStepDelay);
+            usleep(jitterDelayUs(holdStepDelay, 0.15f));
 
             for (NSInteger i = 1; i <= holdSteps; i++) {
                 if (![self performTouchAtPoint:firstPoint phase:TouchPhaseMoved error:&error]) {
@@ -469,7 +533,7 @@ static void appendChildTouchEvent(IOHIDEventRef parent, TouchPhase phase, int in
                     return;
                 }
                 if (i < holdSteps) {
-                    usleep(holdStepDelay);
+                    usleep(jitterDelayUs(holdStepDelay, 0.15f));
                 }
             }
 
@@ -517,7 +581,7 @@ static void appendChildTouchEvent(IOHIDEventRef parent, TouchPhase phase, int in
                         return;
                     }
                     if (remainingSteps > 1) {
-                        usleep(moveStepDelay);
+                        usleep(jitterDelayUs(moveStepDelay, 0.2f));
                     }
                     remainingSteps--;
                 }
@@ -525,7 +589,7 @@ static void appendChildTouchEvent(IOHIDEventRef parent, TouchPhase phase, int in
                 remainingWeight -= [segmentWeights[segmentIndex] doubleValue];
             }
 
-            usleep(10000);
+            usleep(jitterDelayUs(10000, 0.3f));
             if (![self performTouchAtPoint:lastPoint phase:TouchPhaseEnded error:&error]) {
                 if (completion) completion(NO, error);
                 return;
