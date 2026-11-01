@@ -18,28 +18,20 @@ jobs:
       - name: Install ldid
         run: brew install ldid
 
-      - name: Patch ALL Roothide Dependencies
+      - name: Bypass Roothide and Skip Prefs UI
         run: |
-          python3 -c "
-          import os, re
-          for root, dirs, files in os.walk('.'):
-              for file in files:
-                  if file.endswith(('.m', '.xm', '.h')):
-                      filepath = os.path.join(root, file)
-                      with open(filepath, 'r') as f:
-                          content = f.read()
-                      
-                      # Remove the include
-                      content = content.replace('#include <roothide.h>', '')
-                      content = content.replace('#import <roothide.h>', '')
-                      
-                      # Replace rootfs and jbroot path wrappers
-                      content = re.sub(r'rootfs\((.*?)\)', r'\1', content)
-                      content = re.sub(r'jbroot\((.*?)\)', r'\1', content)
-                      
-                      with open(filepath, 'w') as f:
-                          f.write(content)
-          "
+          # 1. Bypass roothide functions
+          echo "" >> Prefix.pch
+          echo "#define rootfs(x) (x)" >> Prefix.pch
+          echo "#define jbroot(x) (x)" >> Prefix.pch
+          echo "#define libroot() \"\"" >> Prefix.pch
+          find . -type f \( -name "*.m" -o -name "*.xm" -o -name "*.h" \) -exec sed -i '' '/roothide\.h/d' {} +
+          
+          # 2. Remove the prefs UI from the build so it doesn't crash on Preferences.framework
+          sed -i '' '/SUBPROJECTS += prefs/d' Makefile
+          
+          # 3. Remove PreferenceLoader dependency from control file
+          sed -i '' '/preferenceloader/d' control
 
       - name: Compile Tweak
         run: |
