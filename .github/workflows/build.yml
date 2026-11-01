@@ -18,10 +18,16 @@ jobs:
       - name: Install ldid
         run: brew install ldid
 
-      - name: Fetch Missing Roothide Header
+      - name: Patch AppManager for Rootless
         run: |
-          mkdir -p $THEOS/include
-          curl -L https://raw.githubusercontent.com/roothide/Bootstrap/main/include/roothide.h -o $THEOS/include/roothide.h
+          python3 -c "
+          with open('AppManager.m', 'r') as f:
+              content = f.read()
+          content = content.replace('#include <roothide.h>', '')
+          content = content.replace('rootfs(path)', 'path')
+          with open('AppManager.m', 'w') as f:
+              f.write(content)
+          "
 
       - name: Compile Tweak
         run: |
