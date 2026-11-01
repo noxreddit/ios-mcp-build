@@ -211,8 +211,16 @@ static IOHIDEventRef createChildTouchEvent(TouchPhase phase, int index, CGPoint 
     );
     if (!child) return NULL;
 
-    IOHIDEventSetFloatValue(child, 0xb0014, 0.04f);
-    IOHIDEventSetFloatValue(child, 0xb0015, 0.04f);
+    // MajorRadius and MinorRadius: random values between 0.03f and 0.06f using arc4random_uniform
+    float majorRadius = 0.03f + (float)arc4random_uniform(4) * 0.01f;
+    float minorRadius = 0.03f + (float)arc4random_uniform(4) * 0.01f;
+    IOHIDEventSetFloatValue(child, 0xb0014, majorRadius);
+    IOHIDEventSetFloatValue(child, 0xb0015, minorRadius);
+
+    // kIOHIDEventFieldDigitizerPressure: random value between 0.3f and 0.8f using arc4random_uniform
+    float pressure = 0.3f + (float)arc4random_uniform(6) * 0.1f;
+    IOHIDEventSetFloatValue(child, 0xb0016, pressure);
+
     return child;
 }
 
