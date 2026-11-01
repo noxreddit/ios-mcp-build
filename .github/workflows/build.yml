@@ -18,19 +18,35 @@ jobs:
       - name: Install ldid
         run: brew install ldid
 
-      - name: Bypass Roothide and Skip Prefs UI
+      - name: Patch Roothide and Skip Prefs
         run: |
-          # 1. Bypass roothide functions
-          echo "" >> Prefix.pch
-          echo "#define rootfs(x) (x)" >> Prefix.pch
-          echo "#define jbroot(x) (x)" >> Prefix.pch
-          echo "#define libroot() \"\"" >> Prefix.pch
-          find . -type f \( -name "*.m" -o -name "*.xm" -o -name "*.h" \) -exec sed -i '' '/roothide\.h/d' {} +
+          python3 -c "
+          import os, re
+          for root, dirs, files in os.walk('.'):
+              for file in files:
+                  if file.endswith(('.m', '.xm', '.h')):
+                      filepath = os.path.join(root, file)
+                      with open(filepath, 'r', errors='ignore') as f:
+                          content = f.read()
+                      
+                      # Remove the roothide include entirely
+                      content = re.sub(r'#(include|import)\s+<roothide\.h>', '', content)
+                      
+                      # Replace rootfs(x) and jbroot(x) with just x
+                      content = re.sub(r'rootfs\((.*?)\)', r'\1', content)
+                      content = re.sub(r'jbroot\((.*?)\)', r'\1', content)
+                      
+                      # Replace libroot() with empty string
+                      content = content.replace('libroot()', '@\"\"')
+                      
+                      with open(filepath, 'w') as f:
+                          f.write(content)
+          "
           
-          # 2. Remove the prefs UI from the build so it doesn't crash on Preferences.framework
+          # Remove the prefs UI from the build so it doesn't crash on Preferences.framework
           sed -i '' '/SUBPROJECTS += prefs/d' Makefile
           
-          # 3. Remove PreferenceLoader dependency from control file
+          # Remove PreferenceLoader dependency from control file
           sed -i '' '/preferenceloader/d' control
 
       - name: Compile Tweak
