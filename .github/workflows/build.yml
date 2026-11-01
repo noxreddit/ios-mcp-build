@@ -18,8 +18,9 @@ jobs:
       - name: Install ldid
         run: brew install ldid
 
-      - name: Patch Roothide and Skip Prefs
+      - name: Patch Roothide and Delete Prefs UI
         run: |
+          # 1. Patch Roothide functions (This worked perfectly last time!)
           python3 -c "
           import os, re
           for root, dirs, files in os.walk('.'):
@@ -28,25 +29,22 @@ jobs:
                       filepath = os.path.join(root, file)
                       with open(filepath, 'r', errors='ignore') as f:
                           content = f.read()
-                      
-                      # Remove the roothide include entirely
                       content = re.sub(r'#(include|import)\s+<roothide\.h>', '', content)
-                      
-                      # Replace rootfs(x) and jbroot(x) with just x
                       content = re.sub(r'rootfs\((.*?)\)', r'\1', content)
                       content = re.sub(r'jbroot\((.*?)\)', r'\1', content)
-                      
-                      # Replace libroot() with empty string
                       content = content.replace('libroot()', '@\"\"')
-                      
                       with open(filepath, 'w') as f:
                           f.write(content)
           "
           
-          # Remove the prefs UI from the build so it doesn't crash on Preferences.framework
-          sed -i '' '/SUBPROJECTS += prefs/d' Makefile
+          # 2. Bruteforce delete the prefs UI folder
+          rm -rf prefs
           
-          # Remove PreferenceLoader dependency from control file
+          # 3. Scrub the Makefile of any prefs references
+          sed -i '' 's/SUBPROJECTS.*prefs.*//g' Makefile
+          sed -i '' 's/^SUBPROJECTS =$//g' Makefile
+          
+          # 4. Remove PreferenceLoader dependency
           sed -i '' '/preferenceloader/d' control
 
       - name: Compile Tweak
