@@ -18,6 +18,11 @@ jobs:
       - name: Install ldid
         run: brew install ldid
 
+      - name: Fetch Missing Roothide Header
+        run: |
+          mkdir -p $THEOS/include
+          curl -L https://raw.githubusercontent.com/roothide/Bootstrap/main/include/roothide.h -o $THEOS/include/roothide.h
+
       - name: Compile Tweak
         run: |
           make clean
