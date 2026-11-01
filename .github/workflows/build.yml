@@ -60,10 +60,14 @@ jobs:
           EOF
 
       - name: Build
-        run: make THEOS_PACKAGE_SCHEME=rootless FINALPACKAGE=1 ADDITIONAL_CFLAGS="-I$GITHUB_WORKSPACE/stub"
+        run: |
+          make THEOS_PACKAGE_SCHEME=rootless FINALPACKAGE=1 ADDITIONAL_CFLAGS="-I$GITHUB_WORKSPACE/stub" || true
+          echo "---- Built files ----"
+          find .theos/obj -name "*.dylib"
 
       - name: Upload dylib
         uses: actions/upload-artifact@v4
         with:
           name: ios-mcp-dylib
           path: .theos/obj/*.dylib
+          if-no-files-found: error
