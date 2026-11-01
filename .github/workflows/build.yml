@@ -18,61 +18,11 @@ jobs:
       - name: Install ldid
         run: brew install ldid
 
-      - name: Show original Makefile
-        run: cat Makefile
+      - name: Build
+        run: make THEOS_PACKAGE_SCHEME=rootless FINALPACKAGE=1
 
-      - name: Patch Roothide and remove Prefs UI
-        run: |
-          python3 - <<'EOF'
-          import os, re
-
-          # 1. Patch roothide functions in source files
-          for root, dirs, files in os.walk('.'):
-              if '.git' in root:
-                  continue
-              for file in files:
-                  if file.endswith(('.m', '.xm', '.h')):
-                      p = os.path.join(root, file)
-                      c = open(p, 'r', errors='ignore').read()
-                      c = re.sub(r'#(include|import)\s+<roothide\.h>', '', c)
-                      c = re.sub(r'rootfs\((.*?)\)', r'\1', c)
-                      c = re.sub(r'jbroot\((.*?)\)', r'\1', c)
-                      c = c.replace('libroot()', '@""')
-                      open(p, 'w').write(c)
-
-          # 2. Remove every Makefile line about prefs/bundles,
-          #    including continuation lines that end with a backslash
-          lines = open('Makefile').read().splitlines()
-          out = []
-          skipping = False
-          for l in lines:
-              if skipping:
-                  skipping = l.rstrip().endswith('\\')
-                  continue
-              if re.search(r'prefs|BUNDLE_NAME|bundle\.mk', l, re.I):
-                  skipping = l.rstrip().endswith('\\')
-                  continue
-              out.append(l)
-          open('Makefile', 'w').write('\n'.join(out) + '\n')
-          EOF
-
-          # 3. Delete prefs folders and PreferenceLoader files
-          rm -rf prefs
-          rm -rf layout/Library/PreferenceLoader
-
-          # 4. Remove PreferenceLoader dependency
-          sed -i '' '/preferenceloader/Id' control
-
-      - name: Show patched Makefile
-        run: cat Makefile
-
-      - name: Compile Tweak
-        run: |
-          make clean
-          make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=rootless
-
-      - name: Upload DEB
+      - name: Upload dylib
         uses: actions/upload-artifact@v4
         with:
-          name: ios-mcp-deb
-          path: packages/*.deb
+          name: ios-mcp-dylib
+          path: .theos/obj/*.dylib
